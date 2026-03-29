@@ -229,7 +229,8 @@ start_bg() {
 wait_for() {
   local name=$1
   local url=$2
-  local max=${3:-120}
+  local max=${3:-300}
+  local logfile=${4:-""}
   local i=0
   printf "  Waiting for %-20s" "$name..."
   while [ $i -lt $max ]; do
@@ -237,34 +238,47 @@ wait_for() {
       echo -e " ${GREEN}ready${RESET}"
       return 0
     fi
+    # Check if the process died
+    if [ -n "$logfile" ] && grep -qi 'error\|fatal\|failed\|exiting' "$logfile" 2>/dev/null; then
+      echo -e " ${RED}crashed${RESET}"
+      echo ""
+      echo -e "  ${RED}Last log lines from $logfile:${RESET}"
+      tail -20 "$logfile"
+      echo ""
+      return 1
+    fi
     printf "."
     sleep 2
     i=$((i+2))
   done
   echo -e " ${RED}timed out${RESET}"
+  [ -n "$logfile" ] && echo "  Last log:" && tail -10 "$logfile"
   return 1
 }
 
 # ── 6a. llama.cpp ─────────────────────────────────────────────────────────────
 info "Starting llama.cpp on port $PORT_LLAMA..."
+# Use -c 512 on Termux to reduce memory usage; remove --log-disable so we can see errors
+CTX_SIZE=2048
+$IS_TERMUX && CTX_SIZE=512
 LLAMA_PID=$(start_bg "llama" \
   "$LLAMA_BIN" \
     -m "$MODEL_PATH" \
     --port "$PORT_LLAMA" \
     --host 127.0.0.1 \
     -t "$THREADS" \
-    -c 2048 \
-    --log-disable \
+    -c "$CTX_SIZE" \
+    -np 1 \
 )
-wait_for "llama.cpp" "http://127.0.0.1:$PORT_LLAMA/health" 120 \
-  || { warn "llama.cpp slow to start — check $LOG_DIR/llama.log"; }
+wait_for "llama.cpp" "http://127.0.0.1:$PORT_LLAMA/health" 300 "$LOG_DIR/llama.log" \
+  || { warn "llama.cpp failed to start — check $LOG_DIR/llama.log"; }
 
 # ── 6b. Coordinator ───────────────────────────────────────────────────────────
 info "Starting coordinator on port $PORT_COORD..."
 COORD_PID=$(start_bg "coordinator" \
   node "$INSTALL_DIR/coordinator/src/index.js"
 )
-wait_for "coordinator" "http://127.0.0.1:$PORT_COORD/v1/health" 30
+wait_for "coordinator" "http://127.0.0.1:$PORT_COORD/v1/health" 30 "$LOG_DIR/coordinator.log"
 
 # ── 6c. Node (proposer) ───────────────────────────────────────────────────────
 info "Starting swarm node on port $PORT_NODE..."
@@ -276,7 +290,7 @@ NODE_PID=$(LLAMA_URL="http://127.0.0.1:$PORT_LLAMA" \
   NODE_PORT="$PORT_NODE" \
   start_bg "node" node "$INSTALL_DIR/node/src/index.js"
 )
-wait_for "node" "http://127.0.0.1:$PORT_NODE/health" 30
+wait_for "node" "http://127.0.0.1:$PORT_NODE/health" 30 "$LOG_DIR/node.log"
 
 # ── Write PID file for stop.sh ────────────────────────────────────────────────
 cat > "$LOG_DIR/pids" << EOF
