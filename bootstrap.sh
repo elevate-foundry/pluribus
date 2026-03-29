@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pluribus Swarm Bootstrap
-# Installs all dependencies and sets up the swarm on any platform.
+# Installs all dependencies, downloads a starter model, and sets up the swarm.
 # Usage: curl -fsSL https://raw.githubusercontent.com/elevate-foundry/pluribus/master/bootstrap.sh | bash
 
 set -euo pipefail
@@ -8,6 +8,12 @@ set -euo pipefail
 REPO="https://github.com/elevate-foundry/pluribus.git"
 INSTALL_DIR="$HOME/.pluribus-runtime"
 BIN_DIR="$HOME/.local/bin"
+MODELS_DIR="$HOME/models"
+LLAMA_DIR="$HOME/.pluribus-llama"
+
+# Default starter model — SmolLM2-360M Q4 (~200MB, fast on any CPU)
+MODEL_URL="https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q4_k_m.gguf"
+MODEL_FILE="smollm2-360m-q4.gguf"
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo ""
@@ -26,7 +32,6 @@ echo ""
 IS_TERMUX=false
 IS_MACOS=false
 IS_ARCH=false
-IS_FEDORA=false
 IS_OPENSUSE=false
 PKG_MGR=""
 
@@ -40,11 +45,11 @@ elif [ -f /etc/os-release ]; then
   . /etc/os-release
   case "${ID:-}" in
     ubuntu|debian|raspbian|linuxmint|pop)  PKG_MGR="apt" ;;
-    fedora)                                 PKG_MGR="dnf"; IS_FEDORA=true ;;
-    rhel|centos|rocky|almalinux|ol)        PKG_MGR="dnf_rhel" ;;
+    fedora)                                 PKG_MGR="dnf" ;;
+    rhel|centos|rocky|almalinux|ol)        PKG_MGR="dnf" ;;
     arch|manjaro|endeavouros|garuda)       PKG_MGR="pacman"; IS_ARCH=true ;;
     opensuse*|sles)                        PKG_MGR="zypper"; IS_OPENSUSE=true ;;
-    *)                                     PKG_MGR="apt" ;;  # best guess
+    *)                                     PKG_MGR="apt" ;;
   esac
 else
   PKG_MGR="apt"
@@ -54,81 +59,59 @@ echo "==> Detected environment: ${PKG_MGR}"
 
 # ── Step 1: System dependencies ───────────────────────────────────────────────
 echo ""
-echo "[1/5] Installing system dependencies..."
+echo "[1/6] Installing system dependencies..."
 
-install_pkg() {
-  case "$PKG_MGR" in
-    termux)   pkg install -y "$@" ;;
-    apt)      sudo apt-get install -y "$@" ;;
-    brew)     brew install "$@" ;;
-    dnf|dnf_rhel) sudo dnf install -y "$@" ;;
-    pacman)   sudo pacman -S --noconfirm "$@" ;;
-    zypper)   sudo zypper install -y "$@" ;;
-  esac
-}
-
-# Core tools
 if $IS_TERMUX; then
-  pkg update -y
-  pkg install -y git curl nodejs cmake make clang binutils
+  pkg update -y 2>&1 | tail -3
+  pkg install -y git curl nodejs cmake make clang binutils 2>&1 | tail -3
 elif $IS_MACOS; then
   if ! command -v brew &>/dev/null; then
     echo "  Installing Homebrew..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   fi
-  brew install git curl node cmake
+  brew install git curl node cmake 2>&1 | tail -3
 elif [ "$PKG_MGR" = "apt" ]; then
   sudo apt-get update -qq
-  sudo apt-get install -y git curl build-essential cmake
-elif [ "$PKG_MGR" = "dnf" ] || [ "$PKG_MGR" = "dnf_rhel" ]; then
-  sudo dnf install -y git curl gcc gcc-c++ make cmake
+  sudo apt-get install -y git curl build-essential cmake 2>&1 | tail -3
+elif [ "$PKG_MGR" = "dnf" ]; then
+  sudo dnf install -y git curl gcc gcc-c++ make cmake 2>&1 | tail -3
 elif $IS_ARCH; then
-  sudo pacman -S --noconfirm git curl base-devel cmake
+  sudo pacman -S --noconfirm git curl base-devel cmake 2>&1 | tail -3
 elif $IS_OPENSUSE; then
-  sudo zypper install -y git curl gcc gcc-c++ make cmake
+  sudo zypper install -y git curl gcc gcc-c++ make cmake 2>&1 | tail -3
 fi
 
 echo "  ✓ System dependencies installed"
 
 # ── Step 2: Node.js ───────────────────────────────────────────────────────────
 echo ""
-echo "[2/5] Setting up Node.js..."
+echo "[2/6] Setting up Node.js..."
 
-if $IS_TERMUX; then
-  # Already installed above
-  echo "  ✓ Node.js $(node --version) (Termux)"
-elif $IS_MACOS; then
-  echo "  ✓ Node.js $(node --version) (Homebrew)"
-elif ! command -v node &>/dev/null || [ "$(node -e 'process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)' 2>/dev/null; echo $?)" = "1" ]; then
+if $IS_TERMUX || $IS_MACOS; then
+  echo "  ✓ Node.js $(node --version)"
+elif ! command -v node &>/dev/null; then
   echo "  Installing Node.js 22 via NodeSource..."
   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null || true
-  if [ "$PKG_MGR" = "apt" ]; then
-    sudo apt-get install -y nodejs
-  elif [ "$PKG_MGR" = "dnf" ] || [ "$PKG_MGR" = "dnf_rhel" ]; then
-    sudo dnf install -y nodejs
-  fi
+  if [ "$PKG_MGR" = "apt" ]; then sudo apt-get install -y nodejs; fi
+  if [ "$PKG_MGR" = "dnf" ]; then sudo dnf install -y nodejs; fi
   echo "  ✓ Node.js $(node --version)"
 else
   echo "  ✓ Node.js $(node --version) (already installed)"
 fi
 
-# pnpm
 if ! command -v pnpm &>/dev/null; then
-  echo "  Installing pnpm..."
   npm install -g pnpm 2>&1 | tail -1
 fi
 echo "  ✓ pnpm $(pnpm --version)"
 
 # ── Step 3: llama.cpp ─────────────────────────────────────────────────────────
 echo ""
-echo "[3/5] Setting up llama.cpp..."
+echo "[3/6] Setting up llama.cpp..."
 
-LLAMA_DIR="$HOME/.pluribus-llama"
-
-if [ -f "$LLAMA_DIR/llama-server" ] || [ -f "$LLAMA_DIR/server" ]; then
-  echo "  ✓ llama.cpp already built at $LLAMA_DIR"
+if [ -f "$LLAMA_DIR/llama-server" ]; then
+  echo "  ✓ llama.cpp already built at $LLAMA_DIR/llama-server"
 else
-  echo "  Cloning and building llama.cpp (this takes 2-5 min)..."
+  echo "  Cloning and building llama.cpp (2-5 min)..."
   mkdir -p "$LLAMA_DIR"
 
   if [ ! -d "$LLAMA_DIR/src" ]; then
@@ -138,7 +121,6 @@ else
   cd "$LLAMA_DIR/src"
 
   if $IS_TERMUX; then
-    # Termux: use clang + no GPU
     cmake -B build -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
       -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
       -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=lld" 2>&1 | tail -3
@@ -146,27 +128,52 @@ else
     cmake -B build -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF 2>&1 | tail -3
   fi
 
-  cmake --build build --config Release -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2) \
-    --target llama-server 2>&1 | tail -5
+  NPROC=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+  cmake --build build --config Release -j"$NPROC" --target llama-server 2>&1 | tail -5
 
-  # Copy binary
-  if [ -f build/bin/llama-server ]; then
-    cp build/bin/llama-server "$LLAMA_DIR/llama-server"
-  elif [ -f build/bin/server ]; then
-    cp build/bin/server "$LLAMA_DIR/llama-server"
-  fi
+  BUILT=""
+  [ -f build/bin/llama-server ] && BUILT="build/bin/llama-server"
+  [ -f build/bin/server ]       && BUILT="build/bin/server"
 
-  if [ -f "$LLAMA_DIR/llama-server" ]; then
+  if [ -n "$BUILT" ]; then
+    cp "$BUILT" "$LLAMA_DIR/llama-server"
     chmod +x "$LLAMA_DIR/llama-server"
-    echo "  ✓ llama.cpp built at $LLAMA_DIR/llama-server"
+    echo "  ✓ llama.cpp built: $LLAMA_DIR/llama-server"
   else
-    echo "  ! llama.cpp build failed — you can still use remote nodes"
+    echo "  ! llama.cpp build failed — check $LLAMA_DIR/src/build for errors"
+    echo "  ! You can still use remote nodes without a local model"
   fi
 fi
 
-# ── Step 4: Clone Pluribus ────────────────────────────────────────────────────
+# ── Step 4: Download starter model ───────────────────────────────────────────
 echo ""
-echo "[4/5] Fetching Pluribus source..."
+echo "[4/6] Downloading starter model (SmolLM2-360M ~200MB)..."
+
+mkdir -p "$MODELS_DIR"
+
+if [ -f "$MODELS_DIR/$MODEL_FILE" ]; then
+  echo "  ✓ Model already present: $MODELS_DIR/$MODEL_FILE"
+else
+  echo "  Downloading $MODEL_FILE from HuggingFace..."
+  if command -v wget &>/dev/null; then
+    wget -q --show-progress -O "$MODELS_DIR/$MODEL_FILE" "$MODEL_URL" 2>&1 || \
+      curl -L --progress-bar -o "$MODELS_DIR/$MODEL_FILE" "$MODEL_URL"
+  else
+    curl -L --progress-bar -o "$MODELS_DIR/$MODEL_FILE" "$MODEL_URL"
+  fi
+
+  if [ -f "$MODELS_DIR/$MODEL_FILE" ] && [ -s "$MODELS_DIR/$MODEL_FILE" ]; then
+    SIZE=$(du -sh "$MODELS_DIR/$MODEL_FILE" | cut -f1)
+    echo "  ✓ Model downloaded: $MODELS_DIR/$MODEL_FILE ($SIZE)"
+  else
+    echo "  ! Model download failed — you can download manually:"
+    echo "    wget -O ~/models/$MODEL_FILE '$MODEL_URL'"
+  fi
+fi
+
+# ── Step 5: Clone Pluribus ────────────────────────────────────────────────────
+echo ""
+echo "[5/6] Fetching Pluribus source..."
 
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo "  Updating existing installation..."
@@ -177,62 +184,77 @@ else
 fi
 echo "  ✓ Source ready at $INSTALL_DIR"
 
-# ── Step 5: Install Node deps ─────────────────────────────────────────────────
+# ── Step 6: Install Node deps ─────────────────────────────────────────────────
 echo ""
-echo "[5/5] Installing Node.js dependencies..."
+echo "[6/6] Installing Node.js dependencies..."
 cd "$INSTALL_DIR"
 npm install 2>&1 | tail -3
 echo "  ✓ Dependencies installed"
 
-# ── Install CLI launcher ──────────────────────────────────────────────────────
+# ── Install CLI launchers ─────────────────────────────────────────────────────
 mkdir -p "$BIN_DIR"
 
 cat > "$BIN_DIR/pluribus" << LAUNCHER
 #!/usr/bin/env bash
 exec node "$INSTALL_DIR/cli/src/index.js" "\$@"
 LAUNCHER
-chmod +x "$BIN_DIR/pluribus"
 
 cat > "$BIN_DIR/pluribus-coordinator" << LAUNCHER
 #!/usr/bin/env bash
 exec node "$INSTALL_DIR/coordinator/src/index.js" "\$@"
 LAUNCHER
-chmod +x "$BIN_DIR/pluribus-coordinator"
 
 cat > "$BIN_DIR/pluribus-node" << LAUNCHER
 #!/usr/bin/env bash
+LLAMA_SERVER="$LLAMA_DIR/llama-server"
+MODEL_PATH="$MODELS_DIR/$MODEL_FILE"
+export LLAMA_URL="\${LLAMA_URL:-http://localhost:8080}"
+export LLAMA_MODEL="\${LLAMA_MODEL:-smollm2-360m}"
+export LLAMA_ROLE="\${LLAMA_ROLE:-proposer}"
+export PLURIBUS_COORDINATOR="\${PLURIBUS_COORDINATOR:-http://localhost:7779}"
 exec node "$INSTALL_DIR/node/src/index.js" "\$@"
 LAUNCHER
-chmod +x "$BIN_DIR/pluribus-node"
 
-# Add to PATH if needed
-if ! echo "$PATH" | grep -q "$BIN_DIR"; then
-  SHELL_RC="$HOME/.bashrc"
-  [ -f "$HOME/.zshrc" ] && SHELL_RC="$HOME/.zshrc"
-  echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$SHELL_RC"
-  export PATH="$BIN_DIR:$PATH"
+chmod +x "$BIN_DIR/pluribus" "$BIN_DIR/pluribus-coordinator" "$BIN_DIR/pluribus-node"
+
+# ── PATH — fix for current session AND future sessions ───────────────────────
+export PATH="$BIN_DIR:$PATH"
+
+SHELL_RC="$HOME/.bashrc"
+[ -n "${ZSH_VERSION:-}" ] && SHELL_RC="$HOME/.zshrc"
+[ -f "$HOME/.zshrc" ] && SHELL_RC="$HOME/.zshrc"
+
+PATH_LINE="export PATH=\"$BIN_DIR:\$PATH\""
+if ! grep -qF "$BIN_DIR" "$SHELL_RC" 2>/dev/null; then
+  echo "$PATH_LINE" >> "$SHELL_RC"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
-echo "  ✓ Pluribus installed successfully!"
+echo "  ╔══════════════════════════════════════════════════════════════╗"
+echo "  ║  Pluribus installed successfully!                           ║"
+echo "  ╚══════════════════════════════════════════════════════════════╝"
 echo ""
-echo "  Quick start:"
+echo "  PATH is active in this session. Run each command below in order:"
 echo ""
-echo "  1. Start the coordinator:"
+echo "  ── Step 1: Start the coordinator (in one terminal tab) ──────────"
+echo ""
 echo "     pluribus-coordinator"
 echo ""
-echo "  2. Start a node (with a running llama.cpp server):"
-echo "     LLAMA_URL=http://localhost:8080 LLAMA_MODEL=smollm2-360m pluribus-node"
+echo "  ── Step 2: Start a node (in a second terminal tab) ─────────────"
 echo ""
-echo "  3. Chat with the swarm:"
-echo "     pluribus chat 'What is the nature of consciousness?'"
+echo "     pluribus-node"
+echo ""
+echo "     (This starts llama.cpp with $MODEL_FILE automatically)"
+echo ""
+echo "  ── Step 3: Chat with the swarm ──────────────────────────────────"
+echo ""
 echo "     pluribus repl"
 echo ""
-echo "  4. Or use the SDK:"
-echo "     import { Pluribus } from '$INSTALL_DIR/sdk/src/index.js';"
-echo "     const p = new Pluribus();"
-echo "     const { answer } = await p.chat('Hello, swarm');"
+echo "  Or one-shot:"
+echo "     pluribus chat 'What is the nature of consciousness?'"
 echo ""
 echo "  Docs: https://github.com/elevate-foundry/pluribus"
+echo ""
+echo "  Note: If you open a new terminal, PATH is already saved to $SHELL_RC"
 echo ""
