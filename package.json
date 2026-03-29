@@ -1,0 +1,26 @@
+{
+  "name": "pluribus",
+  "version": "0.1.0",
+  "description": "Distributed AI swarm with braided inference — frontier capability from edge models",
+  "type": "module",
+  "private": true,
+  "workspaces": [
+    "coordinator",
+    "node",
+    "braider",
+    "sdk",
+    "cli"
+  ],
+  "scripts": {
+    "start:coordinator": "node coordinator/src/index.js",
+    "start:node": "node node/src/index.js",
+    "test": "node --test coordinator/tests/*.js braider/tests/*.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "fastify": "^5.8.4",
+    "node-fetch": "^3.3.2"
+  }
+}

@@ -1,0 +1,6 @@
+packages:
+  - 'coordinator'
+  - 'node'
+  - 'braider'
+  - 'sdk'
+  - 'cli'
