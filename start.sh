@@ -271,9 +271,9 @@ wait_for() {
 
 # ── 6a. llama.cpp ─────────────────────────────────────────────────────────────
 info "Starting llama.cpp on port $PORT_LLAMA..."
-# Use -c 512 on Termux to reduce memory usage; remove --log-disable so we can see errors
+# Use 2048 context on all platforms — minimum needed for braiding 4 proposals
+# SmolLM2-360M Q4_K_M at ctx=2048 uses ~450MB RAM which is fine on modern Android
 CTX_SIZE=2048
-$IS_TERMUX && CTX_SIZE=512
 LLAMA_PID=$(start_bg "llama" \
   "$LLAMA_BIN" \
     -m "$MODEL_PATH" \
