@@ -15,8 +15,9 @@ LOG_DIR="$HOME/.pluribus-logs"
 BIN_DIR="$HOME/.local/bin"
 REPO="https://github.com/elevate-foundry/pluribus.git"
 
-MODEL_FILE="smollm2-360m-q4.gguf"
-MODEL_URL="https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q4_k_m.gguf"
+MODEL_FILE="SmolLM2-360M-Instruct-Q4_K_M.gguf"
+# bartowski mirror — verified public, no auth gate, real GGUF binary
+MODEL_URL="https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf"
 
 PORT_LLAMA=8080        # llama.cpp inference server
 PORT_NODE=7778         # Pluribus node
@@ -133,18 +134,30 @@ echo -e "${BOLD}[3/6] Checking model...${RESET}"
 
 MODEL_PATH="$MODELS_DIR/$MODEL_FILE"
 
-if [ -f "$MODEL_PATH" ] && [ -s "$MODEL_PATH" ]; then
+# Helper: verify file starts with GGUF magic bytes
+check_gguf() {
+  local f=$1
+  [ -f "$f" ] && [ -s "$f" ] || return 1
+  local magic
+  magic=$(dd if="$f" bs=1 count=4 2>/dev/null | od -A n -t x1 | tr -d ' \n')
+  [ "$magic" = "47475546" ]  # GGUF in hex
+}
+
+if check_gguf "$MODEL_PATH"; then
   SIZE=$(du -sh "$MODEL_PATH" | cut -f1)
   ok "Model ready: $MODEL_PATH ($SIZE)"
 else
-  info "Downloading SmolLM2-360M (~200MB)..."
+  # Remove any corrupted/partial file before downloading
+  [ -f "$MODEL_PATH" ] && warn "Removing corrupted model file, re-downloading..." && rm -f "$MODEL_PATH"
+  info "Downloading SmolLM2-360M-Instruct Q4_K_M (~200MB)..."
   if command -v wget &>/dev/null; then
-    wget -q --show-progress -O "$MODEL_PATH" "$MODEL_URL" || \
+    wget --show-progress -O "$MODEL_PATH" "$MODEL_URL" 2>&1 || \
       curl -L --progress-bar -o "$MODEL_PATH" "$MODEL_URL"
   else
     curl -L --progress-bar -o "$MODEL_PATH" "$MODEL_URL"
   fi
-  [ -s "$MODEL_PATH" ] && ok "Model downloaded: $MODEL_PATH" || die "Model download failed"
+  check_gguf "$MODEL_PATH" && ok "Model downloaded: $MODEL_PATH" \
+    || die "Model download failed or file is not a valid GGUF. Check your internet connection."
 fi
 
 # ════════════════════════════════════════════════════════════════════
