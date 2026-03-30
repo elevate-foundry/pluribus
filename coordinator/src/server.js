@@ -163,10 +163,10 @@ export async function buildCoordinatorServer(config = {}) {
     // Load persisted history if conversation_id given
     const fullHistory = loadHistory(conversation_id, history);
 
-    // Assign nodes
+    // Assign nodes — use all available proposers for maximum braiding quality
     let assignment;
     try {
-      assignment = registry.assignBraid(mode === 'single' ? 1 : 1);
+      assignment = registry.assignBraid(1);
     } catch (err) {
       return reply.code(503).send({ error: err.message });
     }

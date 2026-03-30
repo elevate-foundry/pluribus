@@ -19,23 +19,11 @@
 
 // ── Prompt templates ──────────────────────────────────────────────────────────
 
-const PROPOSER_SYSTEM = `You are a precise, concise reasoning assistant. Answer the user's question directly and thoroughly. Show your reasoning step by step where applicable.`;
+const PROPOSER_SYSTEM = `You are a concise assistant. Answer the question directly and clearly.`;
 
-const CRITIC_SYSTEM = `You are a critical evaluator. You will be given a question and several proposed answers from different AI models. Your job is to:
-1. Identify the strongest reasoning in each proposal
-2. Note any errors, gaps, or contradictions
-3. Assign a quality score (1-10) to each proposal
-4. Briefly explain which proposal(s) have the best reasoning
+const CRITIC_SYSTEM = `You are a critical evaluator. Given a question and several proposals, briefly identify which proposal has the best reasoning and why. Be concise.`;
 
-Be objective and specific. Focus on correctness and completeness.`;
-
-const SYNTHESIZER_SYSTEM = `You are a master synthesizer. You will be given a question, several proposed answers, and a critical evaluation of those answers. Your job is to produce the single best possible answer by:
-1. Taking the strongest reasoning from each proposal
-2. Correcting any errors identified in the critique
-3. Filling in gaps that none of the proposals addressed
-4. Writing a clear, complete, well-structured final answer
-
-Do not mention the other models or the synthesis process. Just deliver the best possible answer as if it were your own.`;
+const SYNTHESIZER_SYSTEM = `You are a synthesis assistant. Read the proposals below and write the single best answer to the question. Use the strongest reasoning from each proposal. Be clear and complete. Do not mention other models or proposals.`;
 
 // ── Braider class ─────────────────────────────────────────────────────────────
 
@@ -113,8 +101,13 @@ export class Braider {
     }
 
     // ── Layer 2: Critic ───────────────────────────────────────────────────────
+    // Truncate each proposal to 300 chars to avoid context overflow on small models
+    const PROPOSAL_MAX = 300;
     const proposalBlock = proposals
-      .map((p, i) => `### Proposal ${i + 1} (${p.model})\n${p.text}`)
+      .map((p, i) => {
+        const text = p.text.length > PROPOSAL_MAX ? p.text.slice(0, PROPOSAL_MAX) + '...' : p.text;
+        return `### Proposal ${i + 1} (${p.model})\n${text}`;
+      })
       .join('\n\n---\n\n');
 
     const criticMessages = [
@@ -145,9 +138,11 @@ export class Braider {
     }
 
     // ── Layer 3: Synthesizer ──────────────────────────────────────────────────
-    const synthContent = critique
-      ? `## Question\n${query}\n\n## Proposals\n\n${proposalBlock}\n\n## Critical Evaluation\n${critique.text}`
-      : `## Question\n${query}\n\n## Proposals\n\n${proposalBlock}`;
+    // Keep synth prompt compact: truncate critique to 200 chars to save context
+    const critiqueSnippet = critique ? critique.text.slice(0, 200) : null;
+    const synthContent = critiqueSnippet
+      ? `Question: ${query}\n\nProposals:\n${proposalBlock}\n\nCritique: ${critiqueSnippet}\n\nWrite the best answer:`
+      : `Question: ${query}\n\nProposals:\n${proposalBlock}\n\nWrite the best answer:`;
 
     const synthMessages = [
       { role: 'system', content: SYNTHESIZER_SYSTEM },
@@ -158,8 +153,14 @@ export class Braider {
     const synthResult = await this._callWithTimeout(synthNode, synthMessages, {
       ...params,
       temperature: params.temperature ?? 0.5,
-      max_tokens: params.max_tokens ?? 2048,
+      max_tokens: params.max_tokens ?? 1500,
     });
+
+    // Fallback: if synthesizer returned empty/whitespace, return the longest proposal
+    if (!synthResult.text?.trim()) {
+      const best = proposals.reduce((a, b) => (b.text?.length > a.text?.length ? b : a), proposals[0]);
+      synthResult.text = best.text;
+    }
 
     trace.push({ layer: 'synthesizer', nodeId: synthNode.nodeId, elapsed_ms: Date.now() - t0 });
 
